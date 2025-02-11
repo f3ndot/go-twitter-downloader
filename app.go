@@ -18,9 +18,7 @@ import (
 	"time"
 )
 
-type TweetEntry struct {
-	ID int `json:"id"`
-}
+const VERSION = "0.1.0"
 
 type AuthCookies struct {
 	AuthToken string `json:"auth_token"`
@@ -218,7 +216,7 @@ func polishSpreadsheet() error {
 		Values: [][]interface{}{
 			{"Tweets Last Pulled (ET):", time.Now().In(tz).Format(time.DateTime)},
 			{"Software:", "Justin's go-twitter-downloader"},
-			{"Version:", "v0.1.0"},
+			{"Version:", fmt.Sprintf("v%s", VERSION)},
 		},
 	}).ValueInputOption("USER_ENTERED").Do()
 	if err != nil {
