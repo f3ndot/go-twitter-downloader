@@ -34,7 +34,7 @@ var infoSheetID int64 = -1
 var srv *sheets.Service
 var tz *time.Location
 
-const batchSize = 50
+const batchSize = 200
 
 func usage() {
 	fmt.Fprintf(os.Stderr, "Usage: %s [options] <username>\n", os.Args[0])
@@ -125,9 +125,11 @@ func prepareSpreadsheet(username string) error {
 		}
 	}
 
-	h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13 := "Date/Time (ET)",
+	h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15 := "Date/Time (ET)",
 		"Link",
 		"Text",
+		"HasVideos",
+		"HasPhotos",
 		"IsQuoted",
 		"IsPin",
 		"IsReply",
@@ -137,7 +139,7 @@ func prepareSpreadsheet(username string) error {
 		"Likes",
 		"Retweets",
 		"Replies",
-		"Quoted Tweet"
+		"Quoted Tweet/Tweet Replied To"
 	fmt.Printf("Setting up spreadsheet %s...\n", spreadsheetID)
 	requests = []*sheets.Request{
 		{
@@ -188,6 +190,8 @@ func prepareSpreadsheet(username string) error {
 							{UserEnteredValue: &sheets.ExtendedValue{StringValue: &h11}},
 							{UserEnteredValue: &sheets.ExtendedValue{StringValue: &h12}},
 							{UserEnteredValue: &sheets.ExtendedValue{StringValue: &h13}},
+							{UserEnteredValue: &sheets.ExtendedValue{StringValue: &h14}},
+							{UserEnteredValue: &sheets.ExtendedValue{StringValue: &h15}},
 						},
 					},
 				},
@@ -243,13 +247,17 @@ func polishSpreadsheet() error {
 			},
 		},
 		{
-			AutoResizeDimensions: &sheets.AutoResizeDimensionsRequest{
-				Dimensions: &sheets.DimensionRange{
+			UpdateDimensionProperties: &sheets.UpdateDimensionPropertiesRequest{
+				Range: &sheets.DimensionRange{
 					SheetId:    tweetsSheetID,
 					Dimension:  "COLUMNS",
 					StartIndex: 3,
 					EndIndex:   12,
 				},
+				Properties: &sheets.DimensionProperties{
+					PixelSize: 70,
+				},
+				Fields: "pixelSize",
 			},
 		},
 		{
@@ -261,7 +269,7 @@ func polishSpreadsheet() error {
 					EndIndex:   2, // Only column B
 				},
 				Properties: &sheets.DimensionProperties{
-					PixelSize: 90, // Fixed width of 200 pixels
+					PixelSize: 90,
 				},
 				Fields: "pixelSize",
 			},
@@ -285,8 +293,8 @@ func polishSpreadsheet() error {
 				Range: &sheets.DimensionRange{
 					SheetId:    tweetsSheetID,
 					Dimension:  "COLUMNS",
-					StartIndex: 12,
-					EndIndex:   13,
+					StartIndex: 14,
+					EndIndex:   15,
 				},
 				Properties: &sheets.DimensionProperties{
 					PixelSize: 500,
@@ -313,8 +321,8 @@ func polishSpreadsheet() error {
 				Range: &sheets.GridRange{
 					SheetId:          tweetsSheetID,
 					StartRowIndex:    0, // Entire column (all rows)
-					StartColumnIndex: 12,
-					EndColumnIndex:   13,
+					StartColumnIndex: 14,
+					EndColumnIndex:   15,
 				},
 				Cell: &sheets.CellData{
 					UserEnteredFormat: &sheets.CellFormat{
@@ -348,7 +356,7 @@ func polishSpreadsheet() error {
 							SheetId:          tweetsSheetID,
 							StartRowIndex:    0,
 							StartColumnIndex: 3,
-							EndColumnIndex:   8,
+							EndColumnIndex:   10,
 						},
 					},
 					// Condition: Format if cell value > 100
@@ -379,7 +387,7 @@ func polishSpreadsheet() error {
 							SheetId:          tweetsSheetID,
 							StartRowIndex:    0,
 							StartColumnIndex: 3,
-							EndColumnIndex:   8,
+							EndColumnIndex:   10,
 						},
 					},
 					// Condition: Format if cell value > 100
@@ -543,14 +551,28 @@ func main() {
 			return
 		}
 		if spreadsheetID != "" {
-			quoteText := "N/A"
-			if tweet.Tweet.QuotedStatus != nil {
-				quoteText = fmt.Sprintf("From @%s: %s", tweet.Tweet.QuotedStatus.Username, tweet.Tweet.QuotedStatus.Text)
+			quoteText := ""
+			if tweet.IsQuoted {
+				if tweet.Tweet.QuotedStatus != nil {
+					quoteText = fmt.Sprintf("From @%s:\n%s", tweet.Tweet.QuotedStatus.Username, tweet.Tweet.QuotedStatus.Text)
+				} else {
+					quoteText = fmt.Sprintf("https://x.com/quoting/status/%s", tweet.Tweet.QuotedStatusID)
+				}
 			}
+			if tweet.IsReply {
+				if tweet.Tweet.InReplyToStatus != nil {
+					quoteText = fmt.Sprintf("Replying to @%s:\n%s", tweet.Tweet.InReplyToStatus.Username, tweet.Tweet.InReplyToStatus.Text)
+				} else {
+					quoteText = fmt.Sprintf("https://x.com/replying/status/%s", tweet.Tweet.InReplyToStatusID)
+				}
+			}
+
 			spreadsheetDataBuf = append(spreadsheetDataBuf, []interface{}{
 				tweet.TimeParsed.In(tz).Format(time.DateTime),
 				tweet.PermanentURL,
 				tweet.Text,
+				len(tweet.Videos) > 0,
+				len(tweet.Photos) > 0,
 				tweet.IsQuoted,
 				tweet.IsPin,
 				tweet.IsReply,
