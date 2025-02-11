@@ -1,4 +1,4 @@
-module justinbull.com/twitter-downloader
+module github.com/f3ndot/go-twitter-downloader
 
 go 1.23.5
 
