@@ -46,7 +46,7 @@ Go to [Google Cloud Console](https://console.cloud.google.com) and:
 ## Usage
 
 ```zsh                                                                                                                                                  ─╯
-Usage: ./twitter-downloader [options] <username>
+Usage: ./go-twitter-downloader [options] <username>
 Options:
   -number int
     	Max number of tweets to download (default 3200)
@@ -207,7 +207,7 @@ In order for uploading to Google sheets, you first need to:
 Then use like so:
 
 ```zsh
-./twitter-downloader -spreadsheed-id 6SUpsNE1Na0E0B1vCxCooKEm8Um9 f3ndot
+./go-twitter-downloader -spreadsheed-id 6SUpsNE1Na0E0B1vCxCooKEm8Um9 f3ndot
 ```
 
 #### Example
