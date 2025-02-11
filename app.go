@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -60,6 +63,12 @@ func setupGoogleSheetsService(ctx context.Context) error {
 	return nil
 }
 
+func secureRandomHex(n int) string {
+	b := make([]byte, n/2)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
 func prepareSpreadsheet(username string) error {
 	if srv == nil {
 		return fmt.Errorf("service not initialized")
@@ -71,66 +80,47 @@ func prepareSpreadsheet(username string) error {
 		log.Fatalf("Failed to retrieve spreadsheet details: %v", err)
 	}
 	fmt.Printf("Resetting spreadsheet %s...\n", spreadsheetID)
-	var requests []*sheets.Request
+	requests := []*sheets.Request{
+		{
+			AddSheet: &sheets.AddSheetRequest{
+				Properties: &sheets.SheetProperties{
+					Title: fmt.Sprintf("Tweets - %s", secureRandomHex(12)),
+				},
+			},
+		},
+		{
+			AddSheet: &sheets.AddSheetRequest{
+				Properties: &sheets.SheetProperties{
+					Title: fmt.Sprintf("Information - %s", secureRandomHex(12)),
+				},
+			},
+		},
+	}
 	for _, sheet := range spreadsheet.Sheets {
 		sheetID := sheet.Properties.SheetId
 		fmt.Println("Deleting Sheet:", sheet.Properties.Title, "Sheet ID:", sheetID)
 
-		if sheet.Properties.Title == "Tweets" {
-			tweetsSheetID = sheetID
-			_, err := srv.Spreadsheets.Values.Clear(spreadsheetID, "Tweets", &sheets.ClearValuesRequest{}).Do()
-			if err != nil {
-				panic(fmt.Errorf("unable to clear Google Sheet: %w", err))
-			}
-		} else if sheet.Properties.Title == "Information" {
-			infoSheetID = sheetID
-			_, err := srv.Spreadsheets.Values.Clear(spreadsheetID, "Information", &sheets.ClearValuesRequest{}).Do()
-			if err != nil {
-				panic(fmt.Errorf("unable to clear Google Sheet: %w", err))
-			}
-		} else {
-			requests = append(requests, &sheets.Request{
-				DeleteSheet: &sheets.DeleteSheetRequest{
-					SheetId: sheetID,
-				},
-			})
-		}
-	}
-	if tweetsSheetID == -1 {
 		requests = append(requests, &sheets.Request{
-			AddSheet: &sheets.AddSheetRequest{
-				Properties: &sheets.SheetProperties{
-					Title: "Tweets",
-				},
-			},
-		})
-	}
-	if infoSheetID == -1 {
-		requests = append(requests, &sheets.Request{
-			AddSheet: &sheets.AddSheetRequest{
-				Properties: &sheets.SheetProperties{
-					Title: "Information",
-				},
+			DeleteSheet: &sheets.DeleteSheetRequest{
+				SheetId: sheetID,
 			},
 		})
 	}
 
-	if len(requests) > 0 {
-		batchUpdateRequest := &sheets.BatchUpdateSpreadsheetRequest{
-			Requests: requests,
-		}
-		results, err := srv.Spreadsheets.BatchUpdate(spreadsheetID, batchUpdateRequest).Do()
-		if err != nil {
-			panic(fmt.Errorf("unable to reset Google Sheet: %w", err))
-		}
-		for _, reply := range results.Replies {
-			if reply != nil && reply.AddSheet != nil && reply.AddSheet.Properties != nil {
-				if reply.AddSheet.Properties.Title == "Tweets" {
-					tweetsSheetID = reply.AddSheet.Properties.SheetId
-				}
-				if reply.AddSheet.Properties.Title == "Information" {
-					infoSheetID = reply.AddSheet.Properties.SheetId
-				}
+	batchUpdateRequest := &sheets.BatchUpdateSpreadsheetRequest{
+		Requests: requests,
+	}
+	results, err := srv.Spreadsheets.BatchUpdate(spreadsheetID, batchUpdateRequest).Do()
+	if err != nil {
+		panic(fmt.Errorf("unable to reset Google Sheet: %w", err))
+	}
+	for _, reply := range results.Replies {
+		if reply != nil && reply.AddSheet != nil && reply.AddSheet.Properties != nil {
+			if strings.HasPrefix(reply.AddSheet.Properties.Title, "Tweets - ") {
+				tweetsSheetID = reply.AddSheet.Properties.SheetId
+			}
+			if strings.HasPrefix(reply.AddSheet.Properties.Title, "Information - ") {
+				infoSheetID = reply.AddSheet.Properties.SheetId
 			}
 		}
 	}
@@ -157,8 +147,18 @@ func prepareSpreadsheet(username string) error {
 					GridProperties: &sheets.GridProperties{
 						FrozenRowCount: 1, // Freeze the first row
 					},
+					Title: "Tweets",
 				},
-				Fields: "gridProperties.frozenRowCount",
+				Fields: "gridProperties.frozenRowCount,title",
+			},
+		},
+		{
+			UpdateSheetProperties: &sheets.UpdateSheetPropertiesRequest{
+				Properties: &sheets.SheetProperties{
+					SheetId: infoSheetID,
+					Title:   "Information",
+				},
+				Fields: "title",
 			},
 		},
 		{
@@ -196,7 +196,7 @@ func prepareSpreadsheet(username string) error {
 		},
 	}
 	// Send batch update request
-	batchUpdateRequest := &sheets.BatchUpdateSpreadsheetRequest{Requests: requests}
+	batchUpdateRequest = &sheets.BatchUpdateSpreadsheetRequest{Requests: requests}
 	_, err = srv.Spreadsheets.BatchUpdate(spreadsheetID, batchUpdateRequest).Do()
 	if err != nil {
 		panic(fmt.Errorf("unable to prepare Google Sheet: %w", err))
@@ -209,7 +209,29 @@ func polishSpreadsheet() error {
 		return fmt.Errorf("service not initialized")
 	}
 	fmt.Printf("Polishing up spreadsheet %s...\n", spreadsheetID)
+
+	_, err := srv.Spreadsheets.Values.Update(spreadsheetID, "Information!A1", &sheets.ValueRange{
+		Values: [][]interface{}{
+			{"Tweets Last Pulled (ET):", time.Now().In(tz).Format(time.DateTime)},
+			{"Software:", "Justin's go-twitter-downloader"},
+			{"Version:", "v0.1.0"},
+		},
+	}).ValueInputOption("USER_ENTERED").Do()
+	if err != nil {
+		panic(fmt.Errorf("unable to polish Google Sheet: %w", err))
+	}
+
 	requests := []*sheets.Request{
+		{
+			AutoResizeDimensions: &sheets.AutoResizeDimensionsRequest{
+				Dimensions: &sheets.DimensionRange{
+					SheetId:    infoSheetID,
+					Dimension:  "COLUMNS",
+					StartIndex: 0,
+					EndIndex:   2,
+				},
+			},
+		},
 		{
 			AutoResizeDimensions: &sheets.AutoResizeDimensionsRequest{
 				Dimensions: &sheets.DimensionRange{
@@ -318,21 +340,72 @@ func polishSpreadsheet() error {
 				Fields: "userEnteredFormat.wrapStrategy",
 			},
 		},
+		{
+			AddConditionalFormatRule: &sheets.AddConditionalFormatRuleRequest{
+				Rule: &sheets.ConditionalFormatRule{
+					Ranges: []*sheets.GridRange{
+						{
+							SheetId:          tweetsSheetID,
+							StartRowIndex:    0,
+							StartColumnIndex: 3,
+							EndColumnIndex:   8,
+						},
+					},
+					// Condition: Format if cell value > 100
+					BooleanRule: &sheets.BooleanRule{
+						Condition: &sheets.BooleanCondition{
+							Type: "TEXT_EQ",
+							Values: []*sheets.ConditionValue{
+								{UserEnteredValue: "TRUE"},
+							},
+						},
+						Format: &sheets.CellFormat{
+							BackgroundColor: &sheets.Color{
+								Red:   0.75,
+								Green: 0.87,
+								Blue:  0.81,
+							},
+						},
+					},
+				},
+				Index: 0,
+			},
+		},
+		{
+			AddConditionalFormatRule: &sheets.AddConditionalFormatRuleRequest{
+				Rule: &sheets.ConditionalFormatRule{
+					Ranges: []*sheets.GridRange{
+						{
+							SheetId:          tweetsSheetID,
+							StartRowIndex:    0,
+							StartColumnIndex: 3,
+							EndColumnIndex:   8,
+						},
+					},
+					// Condition: Format if cell value > 100
+					BooleanRule: &sheets.BooleanRule{
+						Condition: &sheets.BooleanCondition{
+							Type: "TEXT_EQ",
+							Values: []*sheets.ConditionValue{
+								{UserEnteredValue: "FALSE"},
+							},
+						},
+						Format: &sheets.CellFormat{
+							BackgroundColor: &sheets.Color{
+								Red:   0.93,
+								Green: 0.79,
+								Blue:  0.77,
+							},
+						},
+					},
+				},
+				Index: 1,
+			},
+		},
 	}
 	// Send batch update request
 	batchUpdateRequest := &sheets.BatchUpdateSpreadsheetRequest{Requests: requests}
-	_, err := srv.Spreadsheets.BatchUpdate(spreadsheetID, batchUpdateRequest).Do()
-	if err != nil {
-		panic(fmt.Errorf("unable to polish Google Sheet: %w", err))
-	}
-
-	_, err = srv.Spreadsheets.Values.Update(spreadsheetID, "Information!A1", &sheets.ValueRange{
-		Values: [][]interface{}{
-			{"Tweets Last Pulled (ET):", time.Now().In(tz).Format(time.DateTime)},
-			{"Software:", "Justin's go-twitter-downloader"},
-			{"Version:", "v0.1.0"},
-		},
-	}).ValueInputOption("USER_ENTERED").Do()
+	_, err = srv.Spreadsheets.BatchUpdate(spreadsheetID, batchUpdateRequest).Do()
 	if err != nil {
 		panic(fmt.Errorf("unable to polish Google Sheet: %w", err))
 	}
